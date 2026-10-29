@@ -1,0 +1,24 @@
+# Byte compiling & Maven build
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Log files
+*.log
+hs_err_pid*
+replay_pid*
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# Datos temporales de pruebas
+datos_test.csv
+solicitudes_test.csv
+solicitudes_demo.csv
