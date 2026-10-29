@@ -1,0 +1,37 @@
+# Etapa 2 y 3: Diagnóstico de Calidad, Deuda Técnica y Code Smells
+
+## 1. Calidad Externa vs. Calidad Interna (Etapa 2)
+
+### Mirada Externa (Usuario / Funcionalidad Visible)
+Desde el punto de vista del usuario final o administrativo que ejecuta el sistema en el tag `estado-inicial` (`mvn exec:java -Dexec.args="--demo"`), el **Sistema de Gestión de Solicitudes Académicas (SGSA)** cumple con los requerimientos funcionales mínimos:
+- Permite registrar solicitudes académicas validando datos básicos y asignando prioridad automática según tipo y urgencia.
+- Permite asignar un área responsable y actualiza automáticamente el estado a *En Revisión*.
+- Controla las reglas de transición de estados (impide modificar solicitudes cerradas, exige responsable antes de aprobar/rechazar y exige comentario obligatorio al rechazar).
+- Filtra solicitudes por tipo, estado y legajo del estudiante.
+- Genera un reporte general consolidado con contadores por estado y prioridad, y persiste los datos en archivo CSV.
+
+### Mirada Interna (Arquitectura / Mantenibilidad)
+Sin embargo, al inspeccionar la estructura interna del código en `estado-inicial`, se observa una **alta deuda técnica deliberada e imprudente** que compromete seriamente su evolución futura:
+1. **Acoplamiento global mediante estado estático:** `SistemaSolicitudes` concentra listas mutables (`public static List<Sol> lista`), el archivo de persistencia y toda la lógica en métodos estáticos, dificultando el aislamiento de pruebas en JUnit y la concurrencia.
+2. **Violación sistemática de encapsulamiento:** Las entidades `Est`, `Resp` y `Sol` son estructuras anémicas con atributos `public` sin validación ni comportamiento propio.
+3. **Rigidez ante el cambio:** Agregar un nuevo tipo de solicitud (por ejemplo, `REINCORPORACION`), un nuevo estado o cambiar el motor de persistencia (de CSV a base de datos o memoria para tests) obliga a modificar múltiples condicionales `if/else` distribuidos en `SistemaSolicitudes`.
+4. **Ocultamiento de fallos:** Los bloques `catch (Exception ex) {}` vacíos en `guardar()` y `cargar()` silencian errores de entrada/salida, poniendo en riesgo la integridad de los datos sin enterar al usuario ni al desarrollador.
+
+---
+
+## 2. Catálogo de Deuda Técnica y Code Smells Identificados (Etapa 3)
+
+A continuación se documentan **10 code smells y debilidades técnicas** detectadas en la versión `estado-inicial` (superando el mínimo de 8 requeridos):
+
+| # | Code Smell / Debilidad | Ubicación Exacta (`estado-inicial`) | Evidencia en el Código | Impacto y Riesgo de Mantenimiento | Prioridad |
+|---|---|---|---|---|---|
+| **CS-01** | **God Class / Large Class** | `src/main/java/utn/tpi/sgsa/SistemaSolicitudes.java` (líneas 7-272) | Una única clase concentra: validación de dominio, cálculo de prioridades, transiciones de estado, búsquedas, formateo de reportes, simulación de emails y lectura/escritura CSV. | **Crítico:** Cualquier cambio en reglas de negocio, formato de vista o persistencia impacta en el mismo archivo, generando alto riesgo de regresiones (viola SRP). | **ALTA** |
+| **CS-02** | **Primitive Obsession & Magic Numbers** | `Sol.java` (líneas 7-9) y `SistemaSolicitudes.java` (líneas 39-57, 79, 118-130, 179-198) | Uso de `int p` (`1`, `2`, `3`) para prioridades, `int e` (`1`, `2`, `3`, `4`) para estados y `String t` (`"EQUIV"`, `"CERT"`, etc.) para tipos de solicitud. | **Alto:** Permite asignar enteros inválidos (ej. estado `99`), obliga a repetir traducciones manuales `if (s.e == 1)` y carece de seguridad de tipos en compilación. | **ALTA** |
+| **CS-03** | **Long Parameter List & Data Clumps** | `SistemaSolicitudes.reg(...)` (línea 18) y `Sol(...)` (línea 14) | El método `reg(String leg, String nom, String mail, String carr, String tipo, String desc, boolean esUrg)` recibe 7 parámetros sueltos; 4 de ellos viajan siempre juntos representando al estudiante. | **Medio/Alto:** Dificulta la lectura e invocación del método, favorece errores por inversión de parámetros `String` del mismo tipo y complica agregar nuevos datos al pedido. | **ALTA** |
+| **CS-04** | **Anemic Domain Model & Public Fields** | `Est.java`, `Resp.java`, `Sol.java` | Todos los atributos son `public` y mutables (`public int e;`, `public String leg;`), y las clases carecen por completo de métodos de negocio o validaciones invariantes. | **Alto:** Cualquier clase externa puede corromper el estado interno de una solicitud salteándose las reglas de negocio (ej. `s.e = 3` sin tener responsable asignado). | **ALTA** |
+| **CS-05** | **Feature Envy** | `SistemaSolicitudes.asig(...)` (líneas 95-100), `cambEst(...)` (líneas 118-137) y `generarReporte()` (líneas 185-204) | `SistemaSolicitudes` inspecciona y manipula directamente los campos internos de `Sol`, `Est` y `Resp` para decidir si una solicitud está cerrada, cambiar su estado o concatenar su historial. | **Alto:** Desplaza la responsabilidad fuera de la entidad `Solicitud`, dispersando las invariantes de negocio y acoplando el servicio a la representación interna de los datos. | **ALTA** |
+| **CS-06** | **Long Method** | `SistemaSolicitudes.reg(...)` (líneas 18-63) y `generarReporte()` (líneas 167-223) | `reg()` mezcla validaciones sintácticas, árbol de decisión de prioridades, generación de ID, instanciación, persistencia y notificación. `generarReporte()` mezcla cálculo estadístico y renderizado de texto. | **Medio:** Baja cohesión funcional, dificultad para testear el cálculo de prioridad o las estadísticas de forma unitaria sin efectos secundarios de archivos o consola. | **MEDIA** |
+| **CS-07** | **Duplicated Code** | `SistemaSolicitudes.asig(...)` (líneas 66-76) y `cambEst(...)` (líneas 106-116) | El bucle `for` para buscar una solicitud por `id` y verificar si es `null` o si está cerrada (`encontrada.e == 3 \|\| encontrada.e == 4`) está copiado textualmente en ambos métodos. | **Medio:** Si cambia la condición de cierre o el mecanismo de búsqueda, debe actualizarse en múltiples lugares, aumentando el riesgo de inconsistencias. | **MEDIA** |
+| **CS-08** | **Poor Naming (Nombres Crípticos)** | `Est`, `Resp`, `Sol`, campos `t`, `p`, `e`, `f`, métodos `reg`, `asig`, `cambEst` | Uso de abreviaturas ambiguas de una sola letra (`s.e`, `s.p`, `s.t`, `s.f`) que obligan a leer comentarios para saber qué significan. | **Medio:** Incrementa la carga cognitiva al leer el código y contradice las reglas de nombres reveladores de intención de *Clean Code*. | **MEDIA** |
+| **CS-09** | **Swallowed Exceptions / Error Hiding** | `SistemaSolicitudes.guardar()` (línea 236) y `cargar()` (línea 269) | Bloques `catch (Exception ex) { // Ignora excepcion }` y retorno de `null` o `false` con `System.out.println("ERROR...")` en lugar de excepciones de dominio expresivas. | **Alto:** Los fallos de persistencia pasan desapercibidos y el código cliente no puede distinguir programáticamente la causa de un error de validación o regla de negocio. | **ALTA** |
+| **CS-10** | **Hardcoded Dependencies & Global Static State** | `SistemaSolicitudes.java` (líneas 9-12, 60, 100, 226) | Uso de variables `public static` y acoplamiento directo a `FileWriter`/`BufferedReader` y `System.out.println` para notificaciones dentro de la lógica de negocio. | **Alto:** Viola el Principio de Inversión de Dependencias (DIP) e impide inyectar repositorios en memoria o espías de notificación durante las pruebas automatizadas con JUnit 5. | **ALTA** |
